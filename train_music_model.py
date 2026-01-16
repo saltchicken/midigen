@@ -2,57 +2,99 @@ import os
 from pathlib import Path
 from miditok import REMI, TokenizerConfig
 from miditok.pytorch_data import DatasetMIDI, DataCollator
-from torch.utils.data import DataLoader
-from transformers import GPT2Config, GPT2LMHeadModel, Trainer, TrainingArguments, TrainerCallback
+from transformers import GPT2Config, GPT2LMHeadModel, Trainer, TrainingArguments
+from symusic import Score  # Import symusic for MIDI processing
+
+# ---------------------------------------------------------
+# 0. PREPROCESSING (Maestro -> Melody)
+# ---------------------------------------------------------
+# ‼️ CHANGE: Point to the new downloaded dataset folder
+original_data_path = Path("midi_data_base")
+# ‼️ CHANGE: Output folder for processed base data
+melody_data_path = Path("midi_data_base_processed")
+melody_data_path.mkdir(exist_ok=True)
+
+print("Preprocessing Base Dataset (Extracting Melodies)...")
+# Support both .mid and .midi extensions (Maestro uses .midi)
+midi_files = list(original_data_path.glob("*.mid")) + list(original_data_path.glob("*.midi"))
+
+if not midi_files:
+    print(f"⚠️ Error: No MIDI files found in '{original_data_path}'.")
+    print("   -> Did you run 'python download_dataset.py'?")
+    exit()
+
+for midi_file in midi_files:
+    try:
+        # Load the song
+        score = Score(str(midi_file))
+        
+        # Filter for tracks that are NOT drums and have notes
+        valid_tracks = [t for t in score.tracks if not t.is_drum and len(t.notes) > 0]
+        
+        if valid_tracks:
+            # Pick the track with the most notes. 
+            # For Maestro (Piano), this usually captures the main performance well.
+            melody_track = max(valid_tracks, key=lambda t: len(t.notes))
+            
+            # Create a new file with ONLY that track
+            new_score = Score()
+            new_score.ticks_per_quarter = score.ticks_per_quarter
+            new_score.tracks.append(melody_track)
+            
+            # Save to the new folder
+            # ‼️ CHANGE: Ensure filename ends in .mid
+            output_name = midi_file.stem + ".mid"
+            new_score.dump_midi(str(melody_data_path / output_name))
+    except Exception as e:
+        print(f"Skipping {midi_file.name}: {e}")
+
+# Update path to point to the CLEAN data
+midi_paths = list(melody_data_path.glob("*.mid"))
+print(f"Training on {len(midi_paths)} processed melody files.")
 
 # ---------------------------------------------------------
 # 1. SETUP & TOKENIZATION
 # ---------------------------------------------------------
-# Define paths
-midi_paths = list(Path("midi_data").glob("*.mid"))
-
-# Configure the tokenizer (REMI is great for pop/piano music)
-# We use a standard configuration that captures Pitch, Velocity, Duration, etc.
-config = TokenizerConfig(num_velocities=16, use_chords=True)
+# Simplified configuration for Melody
+# - use_chords=False: Forces model to think in single melodic lines.
+# - num_velocities=4: Reduce dynamics complexity.
+config = TokenizerConfig(
+    num_velocities=4, 
+    use_chords=False, 
+    use_programs=False 
+)
 tokenizer = REMI(config)
 
-# "Train" the tokenizer (optional for small data, but good practice)
-# This builds a vocabulary based on the specific notes found in your files.
+# Train the tokenizer
+print("Training tokenizer...")
 tokenizer.train(vocab_size=30000, files_paths=midi_paths)
-tokenizer.save_params(Path("tokenizer.json")) # Save for later
+tokenizer.save_params(Path("tokenizer.json"))
 
 # ---------------------------------------------------------
 # 2. PREPARE DATASET
 # ---------------------------------------------------------
-# GPT models have a fixed "context window" (e.g., 512 tokens).
-# We split your midis into chunks of this size so the model can digest them.
 CONTEXT_LENGTH = 512
 
-# Create a PyTorch Dataset directly from the MIDI files
-# This automatically handles tokenization and chunking
 dataset = DatasetMIDI(
     files_paths=midi_paths,
     tokenizer=tokenizer,
     max_seq_len=CONTEXT_LENGTH,
-    bos_token_id=tokenizer.pad_token_id, # Beginning of sequence
-    eos_token_id=tokenizer["BOS_None"],  # End of sequence (using BOS as separator)
+    bos_token_id=tokenizer.pad_token_id, 
+    eos_token_id=tokenizer["BOS_None"], 
 )
 
-# Data Collator handles padding so all batches are the same shape
 collator = DataCollator(tokenizer.pad_token_id, copy_inputs_as_labels=True)
 
 # ---------------------------------------------------------
 # 3. INITIALIZE MODEL
 # ---------------------------------------------------------
-# We create a *tiny* GPT-2. Standard GPT-2 is too big for 5 files 
-# and will memorize them instantly (overfitting).
 model_config = GPT2Config(
     vocab_size=len(tokenizer),
     n_positions=CONTEXT_LENGTH,
     n_ctx=CONTEXT_LENGTH,
-    n_embd=512,   # Smaller embedding size
-    n_layer=6,    # Fewer layers (standard is 12)
-    n_head=8,     # Fewer heads
+    n_embd=512,
+    n_layer=6,
+    n_head=8,
 )
 
 model = GPT2LMHeadModel(model_config)
@@ -63,12 +105,12 @@ model = GPT2LMHeadModel(model_config)
 training_args = TrainingArguments(
     output_dir="music_model_checkpoints",
     overwrite_output_dir=True,
-    num_train_epochs=50,       # High epochs because data is small
+    num_train_epochs=5,       # ‼️ CHANGE: Maestro is huge (1200+ songs). 5 epochs is plenty for a base.
     per_device_train_batch_size=4,
-    save_steps=100,
+    save_steps=500,
     save_total_limit=2,
     learning_rate=1e-4,
-    remove_unused_columns=False, # Required for MidiTok datasets
+    remove_unused_columns=False,
 )
 
 trainer = Trainer(
@@ -81,4 +123,4 @@ trainer = Trainer(
 print("Starting training...")
 trainer.train()
 trainer.save_model("my_music_model")
-print("Training complete! Model saved to 'my_music_model'.")
+print("Training complete! Base model saved to 'my_music_model'.")
