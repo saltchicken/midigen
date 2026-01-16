@@ -8,10 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
-*.mid*
 
-my_music_model
-music_model_checkpoints
-midi_data
-music_model_lora_chrono
-my_music_model_lora_chrono
+input/*
+output/*
