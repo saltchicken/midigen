@@ -3,7 +3,7 @@ from transformers import GPT2LMHeadModel
 from miditok import REMI
 from pathlib import Path
 
-# 1. Configuration ‼️ Define paths matching your previous training steps
+
 BASE_MODEL_PATH = "./output/maestro_base_model"
 TOKENIZER_PATH = "./output/maestro_tokenizer"
 OUTPUT_MIDI_PATH = "./output/generated_base.midi"
@@ -17,7 +17,7 @@ def generate_midi():
     print(f"Loading base model from {BASE_MODEL_PATH}...")
     model = GPT2LMHeadModel.from_pretrained(BASE_MODEL_PATH)
     
-    # ‼️ Detect device (GPU is much faster)
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Running generation on: {device}")
     model.to(device)
@@ -36,9 +36,9 @@ def generate_midi():
     
     generated_ids = model.generate(
         input_ids,
-        max_length=512,       # ‼️ Length of the song (in tokens)
-        do_sample=True,       # ‼️ True = creative; False = robotic/repetitive
-        temperature=1.0,      # ‼️ 1.0 = balanced, >1.0 = chaotic, <1.0 = conservative
+        max_length=512,
+        do_sample=True,
+        temperature=1.0,
         top_k=50,             # Keep only top 50 likely tokens
         top_p=0.9,            # Nucleus sampling
         pad_token_id=tokenizer.pad_token_id,
@@ -50,11 +50,13 @@ def generate_midi():
     # Convert GPU tensor back to a standard Python list/numpy array
     generated_seq = generated_ids[0].cpu().numpy()
     
-    # miditok's tokens_to_midi converts the IDs back into a MidiFile object
-    generated_midi = tokenizer.tokens_to_midi(generated_seq)
+
+
+    generated_midi = tokenizer.decode(generated_seq)
     
     # 7. Save
-    generated_midi.dump(OUTPUT_MIDI_PATH)
+
+    generated_midi.dump_midi(OUTPUT_MIDI_PATH)
     print(f"✅ Saved generated MIDI to {OUTPUT_MIDI_PATH}")
 
 if __name__ == "__main__":
